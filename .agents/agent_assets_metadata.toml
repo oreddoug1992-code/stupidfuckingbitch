@@ -1,0 +1,8 @@
+uploads = []
+outputs = []
+
+[[generated]]
+id = "9tlKkcP22FJx6mUQU8gkZ"
+uri = "file://artifacts/obd2-pro/assets/images/icon.png"
+type = "image"
+title = "obd2 pro app icon"

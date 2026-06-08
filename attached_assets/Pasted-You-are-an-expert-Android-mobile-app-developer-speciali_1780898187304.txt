@@ -1,0 +1,108 @@
+You are an expert Android mobile app developer specializing in automotive diagnostic software. Build a production-ready Android application called **OBD2 Pro** in Java or Kotlin, using the uploaded screenshots (`Screenshot_20260604_052531_OBD2 Pro.jpg` through `Screenshot_20260604_052611_OBD2 Pro.jpg`) as the definitive visual and functional reference for every screen. Recreate and implement the complete feature set shown, with full error handling, secure tab access, and clean architecture.
+
+## Connection Layer
+
+Support three connection types to an ELM327 adapter:
+- **Bluetooth** — paired device selection, reconnect on drop
+- **Wi-Fi** — TCP socket to ELM327 Wi-Fi adapter (default 192.168.0.10:35000)
+- **USB/OTG** — serial-over-USB via UsbManager
+
+Abstract all three behind a single `OBD2Connection` interface so the rest of the app is connection-agnostic. Handle connection errors, timeouts, and retries gracefully with user-facing status messages.
+
+## OBD2 Protocol Support
+
+Implement full support for **all OBD2 protocols** via the ELM327 AT command set, including protocol auto-detection and manual selection:
+
+- **SAE J1850 PWM** (41.6 kbaud) — Ford
+- **SAE J1850 VPW** (10.4 kbaud) — GM/Chrysler
+- **ISO 9141-2** (5 baud init, 10.4 kbaud) — European/Asian vehicles
+- **ISO 14230-4 KWP** (5 baud init and fast init variants)
+- **ISO 15765-4 CAN** — 11-bit/29-bit identifiers, 250 kbaud and 500 kbaud variants (the dominant modern protocol)
+- **SAE J1939** (heavy-duty CAN)
+- **ISO 15765-4 CAN extended** variants
+
+Implement the full ELM327 AT initialization sequence:
+1. `ATZ` — reset
+2. `ATE0` — echo off
+3. `ATL0` — linefeeds off
+4. `ATH1` — headers on
+5. `ATSP0` — auto-detect protocol (or `ATSPx` for manual)
+6. Query `ATDP` / `ATDPN` to confirm detected protocol and display it in the Dashboard and Vehicle tabs
+
+**Response parsing:** Handle all ELM327 response types — `OK`, `NO DATA`, `UNABLE TO CONNECT`, `BUS BUSY`, `BUS ERROR`, `CAN ERROR`, `DATA ERROR`, `<DATA ERROR`, `STOPPED`, `?` — and surface meaningful feedback to the user for each. Parse multi-line and multi-frame (ISO-TP) responses correctly. Strip headers, length bytes, and padding before decoding PID values. Handle both 11-bit (7E8/7E9) and 29-bit CAN response headers.
+
+**Protocol-specific decoding:** Implement correct byte-order and scaling for each protocol. For CAN/ISO-TP, handle segmented responses (first frame, consecutive frame, flow control). Display the active protocol name and numeric code in the Dashboard connection status area and in Vehicle → OBD2 Module Info.
+
+## UI & Theme
+
+Dark theme throughout. Bottom navigation bar with six tabs: **Dashboard**, **DTCs**, **Service**, **Bi-Di**, **Vehicle**, and **Secrets**. Match the visual style, layout, spacing, color palette, and component design shown in the screenshots exactly.
+
+## Tab Specifications
+
+### Dashboard
+Live connection status, connected device name, protocol info (name + protocol number from `ATDPN`), and real-time sensor data tiles updated via polling loop.
+
+### DTCs
+Top navigation: **OBD2 / ECM**, **ALL MODULES**, **ADV**. Read and clear stored, pending, and permanent fault codes from ECM and all available modules. Display code, description, and severity per entry.
+
+### Service
+Filter bar categories: All, Engine, Transmission, Brakes, Steering, Body, Battery, HVAC, Keys & Security, Tires. Each command card shows:
+- Category label
+- Required engine state (**Engine ON** / **Engine OFF**) where applicable
+- Warning indicator where applicable
+- RUN/execute action
+
+Implement all commands shown in the screenshots:
+- **Engine:** Oil Life Reset, Throttle Body Relearn (Engine OFF), Idle Speed Relearn (Engine ON), EVAP Monitor Reset, Injector Fuel Trim Reset, MAF Adaptation Reset
+- **Transmission:** Trans Adaptive Reset (warning), TCC Adaptation Reset
+- **Brakes:** EPB Retract, EPB Apply, ABS Pump Bleeding, Brake Wear Indicator Reset
+- **Steering:** Steering Angle Calibration, EPS Torque Sensor Reset (Engine ON)
+- **Tires:** TPMS Sensor Relearn, TPMS Pressure Baseline
+- **Body:** Window/Sunroof Calibration
+- **Battery:** Battery Registration, Charging System Reset
+- **HVAC:** HVAC Blend Door Calibration, A/C Service Reset
+- **Keys & Security:** Add Key Fob/Remote, Relearn All Remotes, IMMO Relearn after BCM swap, All Keys Lost Recovery, Remote Start Module Relearn, Key Fob Button Tests, Passive Entry Antenna Calibration, RF/transponder key programming
+
+Include a **Demo mode** that previews all service procedures without a live connection, accessible via "Connect in Demo mode" as shown in the screenshots.
+
+### Bi-Di (Bi-Directional Controls)
+Actuator test cards with **RUN** buttons, organized by system category. Implement all tests shown:
+- **Cooling:** Cooling Fan Low, Cooling Fan High, A/C Compressor
+- **Fuel System:** Fuel Pump
+- **Emissions:** EVAP Purge Valve, EGR Valve, Canister Vent Valve, Secondary Air Pump
+- **Ignition:** Idle Air Control, VVT Solenoid, Starter Relay (short pulse only — enforce maximum pulse duration in code)
+- **Injection:** Injectors 1–8 (individual test per injector)
+- **Suspension:** ABS Pump Motor
+- **Transmission:** TCC Solenoid, Shift Solenoid A, Shift Solenoid B
+
+Also support writing PCM calibration files to the ECU from this tab.
+
+### Vehicle
+- **VIN Lookup** — 17-character VIN input, query NHTSA vPIC API, display full decode
+- **OBD2 Module Info** — protocol name, protocol number, ECU name, calibration ID, CVN
+- **I/M Readiness Monitors** — drive cycle completion status per monitor
+- **Misfire Counters** — per-cylinder misfire event counts
+- **Global Freeze Frame** — sensor snapshot captured at first DTC storage
+
+### Secrets (Hidden Tab)
+Require a **subtle unlock gesture** (e.g., long-press or multi-tap on the tab icon) to reveal. Once unlocked, display:
+- OBD2 connector full pinout diagram
+- Pin 16 = 12V battery power, Pins 4/5 = chassis/signal GND
+- CAN Bus Health Check: Pin 6 CAN High (2.5–3.5V), Pin 14 CAN Low (1.5–2.5V)
+- Toyota/Lexus pre-2005 diagnostic mode: bridge TE1 to E1 on 17-pin connector
+- Honda OBD1 service check connector shorting (pre-1996 2-pin)
+- Additional advanced technician reference content matching the screenshots
+
+The tab should feel intentionally hidden — do not label it obviously in the nav bar before it is unlocked.
+
+## Code Quality Requirements
+
+- **Architecture:** Follow MVVM or Clean Architecture patterns; separate concerns between UI, business logic, and data layers
+- **Error handling:** All OBD2 command calls must handle no-response, busy, and all ELM327 error responses; surface meaningful feedback to the user
+- **Protocol handling:** All protocol-specific parsing logic must be isolated in a dedicated layer so adding or modifying protocol support does not touch UI or business logic
+- **Security:** The Secrets tab unlock mechanism must not be trivially discoverable by inspecting the UI or layout XML
+- **Bluetooth/Wi-Fi/USB permissions:** Handle runtime permissions for Android 12+ correctly
+- **ELM327 protocol:** Implement the full AT command initialization sequence, protocol auto-detection, and correct response parsing for all supported protocols
+- **NHTSA API:** Handle network errors, malformed VINs, and empty results gracefully
+
+Reference the screenshots directly for any ambiguity in layout, component styling, or feature behavior. The screenshots are the source of truth for the UI.
