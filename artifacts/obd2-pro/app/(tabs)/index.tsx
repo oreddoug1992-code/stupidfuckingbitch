@@ -13,48 +13,71 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ConnectSheet } from "@/components/ConnectSheet";
 import { Gauge } from "@/components/Gauge";
+import { SettingsSheet } from "@/components/SettingsSheet";
 import { SensorTile } from "@/components/SensorTile";
 import { useOBD } from "@/context/OBDContext";
-
-const SENSOR_ROWS = [
-  [
-    { key: "coolant" as const, label: "COOLANT", unit: "°C", color: "#E91E63" },
-    { key: "throttle" as const, label: "THROTTLE", unit: "%", color: "#FFB300" },
-  ],
-  [
-    { key: "engineLoad" as const, label: "ENGINE LOAD", unit: "%", color: "#FF5722" },
-    { key: "fuelLevel" as const, label: "FUEL LEVEL", unit: "%", color: "#4CAF50" },
-  ],
-  [
-    { key: "battery" as const, label: "BATTERY", unit: "V", color: "#FFB300" },
-    { key: "oilTemp" as const, label: "OIL TEMP", unit: "°C", color: "#E91E63" },
-  ],
-];
-
-const SECONDARY_ROWS = [
-  [
-    { key: "intakeTemp" as const, label: "INTAKE TEMP", unit: "°C", color: "#00BCD4" },
-    { key: "map" as const, label: "MAP", unit: "kPa", color: "#00E676" },
-  ],
-  [
-    { key: "maf" as const, label: "MAF", unit: "g/s", color: "#9C27B0" },
-    { key: "timingAdv" as const, label: "TIMING ADV.", unit: "°", color: "#E91E63" },
-  ],
-  [
-    { key: "shortFuelTrim" as const, label: "SHORT FT", unit: "%", color: "#FF9800" },
-    { key: "longFuelTrim" as const, label: "LONG FT", unit: "%", color: "#FF9800" },
-  ],
-  [
-    { key: "o2Voltage" as const, label: "O2 SENSOR", unit: "V", color: "#26C6DA" },
-    { key: "baroPressure" as const, label: "BARO", unit: "kPa", color: "#78909C" },
-  ],
-];
+import { useSettings } from "@/context/SettingsContext";
 
 export default function DashboardScreen() {
   const { connectionState, deviceName, protocol, protocolNumber, sensorData, disconnect } = useOBD();
+  const { settings } = useSettings();
   const [showConnect, setShowConnect] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const insets = useSafeAreaInsets();
   const isConnected = connectionState === "connected" || connectionState === "demo";
+
+  const isMetric = settings.unitSystem === "metric";
+
+  // Convert values based on unit system
+  const speedValue = sensorData.speed != null
+    ? isMetric ? sensorData.speed : Math.round(sensorData.speed * 0.621371)
+    : null;
+  const coolantValue = sensorData.coolant != null
+    ? isMetric ? sensorData.coolant : Math.round(sensorData.coolant * 9 / 5 + 32)
+    : null;
+  const oilTempValue = sensorData.oilTemp != null
+    ? isMetric ? sensorData.oilTemp : Math.round(sensorData.oilTemp * 9 / 5 + 32)
+    : null;
+  const intakeTempValue = sensorData.intakeTemp != null
+    ? isMetric ? sensorData.intakeTemp : Math.round(sensorData.intakeTemp * 9 / 5 + 32)
+    : null;
+  const mapValue = sensorData.map != null
+    ? isMetric ? sensorData.map : parseFloat((sensorData.map * 0.145038).toFixed(1))
+    : null;
+
+  const SENSOR_ROWS = [
+    [
+      { label: "COOLANT", value: coolantValue, unit: isMetric ? "°C" : "°F", color: "#E91E63" },
+      { label: "THROTTLE", value: sensorData.throttle, unit: "%", color: "#FFB300" },
+    ],
+    [
+      { label: "ENGINE LOAD", value: sensorData.engineLoad, unit: "%", color: "#FF5722" },
+      { label: "FUEL LEVEL", value: sensorData.fuelLevel, unit: "%", color: "#4CAF50" },
+    ],
+    [
+      { label: "BATTERY", value: sensorData.battery, unit: "V", color: "#FFB300" },
+      { label: "OIL TEMP", value: oilTempValue, unit: isMetric ? "°C" : "°F", color: "#E91E63" },
+    ],
+  ];
+
+  const SECONDARY_ROWS = [
+    [
+      { label: "INTAKE TEMP", value: intakeTempValue, unit: isMetric ? "°C" : "°F", color: "#00BCD4" },
+      { label: "MAP", value: mapValue, unit: isMetric ? "kPa" : "psi", color: "#00E676" },
+    ],
+    [
+      { label: "MAF", value: sensorData.maf, unit: "g/s", color: "#9C27B0" },
+      { label: "TIMING ADV.", value: sensorData.timingAdv, unit: "°", color: "#E91E63" },
+    ],
+    [
+      { label: "SHORT FT", value: sensorData.shortFuelTrim, unit: "%", color: "#FF9800" },
+      { label: "LONG FT", value: sensorData.longFuelTrim, unit: "%", color: "#FF9800" },
+    ],
+    [
+      { label: "O2 SENSOR", value: sensorData.o2Voltage, unit: "V", color: "#26C6DA" },
+      { label: "BARO", value: sensorData.baroPressure, unit: isMetric ? "kPa" : "psi", color: "#78909C" },
+    ],
+  ];
 
   const handleConnectPress = () => {
     if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -84,6 +107,13 @@ export default function DashboardScreen() {
           </Text>
         </View>
         <View style={styles.headerRight}>
+          <TouchableOpacity
+            style={styles.headerIconBtn}
+            onPress={() => setShowSettings(true)}
+            activeOpacity={0.7}
+          >
+            <Feather name="settings" size={17} color="#666" />
+          </TouchableOpacity>
           <Feather name="trending-up" size={16} color="#555" />
           <Feather name="chevron-right" size={16} color="#555" />
         </View>
@@ -120,21 +150,21 @@ export default function DashboardScreen() {
           <View style={styles.gaugeCard}>
             <Gauge
               value={sensorData.rpm}
-              maxValue={8000}
+              maxValue={settings.maxRpm}
               label="ENGINE RPM"
               unit="RPM"
               size={158}
-              color="#00BCD4"
+              color={settings.darkGaugeAccent}
             />
           </View>
           <View style={styles.gaugeCard}>
             <Gauge
-              value={sensorData.speed}
-              maxValue={200}
+              value={speedValue}
+              maxValue={settings.maxSpeed}
               label="SPEED"
-              unit="km/h"
+              unit={isMetric ? "km/h" : "mph"}
               size={158}
-              color="#00BCD4"
+              color={settings.darkGaugeAccent}
             />
           </View>
         </View>
@@ -144,9 +174,9 @@ export default function DashboardScreen() {
           <View key={ri} style={styles.tileRow}>
             {row.map((s) => (
               <SensorTile
-                key={s.key}
+                key={s.label}
                 label={s.label}
-                value={sensorData[s.key]}
+                value={s.value ?? null}
                 unit={s.unit}
                 accentColor={s.color}
               />
@@ -164,9 +194,9 @@ export default function DashboardScreen() {
           <View key={ri} style={styles.tileRow}>
             {row.map((s) => (
               <SensorTile
-                key={s.key}
+                key={s.label}
                 label={s.label}
-                value={sensorData[s.key]}
+                value={s.value ?? null}
                 unit={s.unit}
                 accentColor={s.color}
               />
@@ -174,7 +204,7 @@ export default function DashboardScreen() {
           </View>
         ))}
 
-        {protocolNumber ? (
+        {settings.showProtocolInDashboard && protocolNumber ? (
           <View style={styles.protocolRow}>
             <Text style={styles.protocolLabel}>Protocol</Text>
             <Text style={styles.protocolValue}>{protocol} (#{protocolNumber})</Text>
@@ -185,6 +215,7 @@ export default function DashboardScreen() {
       </ScrollView>
 
       <ConnectSheet visible={showConnect} onClose={() => setShowConnect(false)} />
+      <SettingsSheet visible={showSettings} onClose={() => setShowSettings(false)} />
     </View>
   );
 }
@@ -213,7 +244,15 @@ const styles = StyleSheet.create({
     marginLeft: 4,
   },
   headerSub: { color: "#555", fontSize: 12, fontFamily: "Inter_400Regular" },
-  headerRight: { flexDirection: "row", gap: 8 },
+  headerRight: { flexDirection: "row", alignItems: "center", gap: 10 },
+  headerIconBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    backgroundColor: "#1A1A1A",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   statusBar: {
     flexDirection: "row",
     alignItems: "center",
