@@ -7,6 +7,10 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { Platform } from "react-native";
+
+import { type BluetoothDevice, elm327 } from "@/services/ELM327Bluetooth";
+import { parseDTCs, parseIMReadiness, parseOBDResponse } from "@/services/OBDParser";
 
 export type ConnectionState =
   | "disconnected"
@@ -76,17 +80,22 @@ interface OBDContextValue {
   vinResult: Record<string, string> | null;
   vinLoading: boolean;
   connect: (type: ConnectionType) => void;
-  disconnect: () => void;
-  clearDTCs: () => void;
-  readDTCs: () => void;
-  readIMReadiness: () => void;
+  connectBluetooth: (address: string, name: string) => Promise<{ success: boolean; error?: string }>;
+  disconnect: () => Promise<void>;
+  clearDTCs: () => Promise<void>;
+  readDTCs: () => Promise<void>;
+  readIMReadiness: () => Promise<void>;
   readMisfires: () => void;
   readFreezeFrame: () => void;
   lookupVIN: (vin: string) => void;
   runBiDiTest: (testName: string) => Promise<string>;
   runServiceCommand: (commandName: string) => Promise<string>;
-  readFromECU: () => void;
+  readFromECU: () => Promise<void>;
   ecuInfo: { protocol: string; ecuName: string; calId: string; cvn: string } | null;
+  btDevices: BluetoothDevice[];
+  btScanning: boolean;
+  btError: string | null;
+  scanBluetooth: () => Promise<void>;
 }
 
 const emptySensorData: SensorData = {
@@ -164,6 +173,20 @@ const DEMO_FREEZE: FreezeFrameData = {
   engineLoad: 42,
 };
 
+const DTC_DESCRIPTIONS: Record<string, { description: string; severity: "high" | "medium" | "low" }> = {
+  P0300: { description: "Random/Multiple Cylinder Misfire Detected", severity: "high" },
+  P0301: { description: "Cylinder 1 Misfire Detected", severity: "high" },
+  P0302: { description: "Cylinder 2 Misfire Detected", severity: "high" },
+  P0303: { description: "Cylinder 3 Misfire Detected", severity: "high" },
+  P0304: { description: "Cylinder 4 Misfire Detected", severity: "high" },
+  P0171: { description: "System Too Lean (Bank 1)", severity: "medium" },
+  P0172: { description: "System Too Rich (Bank 1)", severity: "medium" },
+  P0420: { description: "Catalyst System Efficiency Below Threshold (Bank 1)", severity: "medium" },
+  P0440: { description: "Evaporative Emission Control System Malfunction", severity: "low" },
+  P0442: { description: "Evaporative Emission System Leak Detected (small leak)", severity: "low" },
+  P0455: { description: "Evaporative Emission System Leak Detected (large leak)", severity: "medium" },
+};
+
 const OBDContext = createContext<OBDContextValue | null>(null);
 
 export function OBDProvider({ children }: { children: React.ReactNode }) {
@@ -180,11 +203,12 @@ export function OBDProvider({ children }: { children: React.ReactNode }) {
   const [imReadiness, setIMReadiness] = useState<IMReadiness[]>([]);
   const [misfireCounters, setMisfireCounters] = useState<MisfireCounter[]>([]);
   const [freezeFrame, setFreezeFrame] = useState<FreezeFrameData | null>(null);
-  const [vinResult, setVinResult] = useState<Record<string, string> | null>(
-    null,
-  );
+  const [vinResult, setVinResult] = useState<Record<string, string> | null>(null);
   const [vinLoading, setVinLoading] = useState(false);
   const [ecuInfo, setEcuInfo] = useState<OBDContextValue["ecuInfo"]>(null);
+  const [btDevices, setBtDevices] = useState<BluetoothDevice[]>([]);
+  const [btScanning, setBtScanning] = useState(false);
+  const [btError, setBtError] = useState<string | null>(null);
   const demoIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const demoTickRef = useRef(0);
 
@@ -193,10 +217,9 @@ export function OBDProvider({ children }: { children: React.ReactNode }) {
       demoTickRef.current += 1;
       const t = demoTickRef.current;
       const rpm = Math.round(800 + Math.sin(t * 0.08) * 1200 + Math.sin(t * 0.23) * 300);
-      const speed = 0;
       setSensorData({
         rpm: Math.max(700, rpm),
-        speed,
+        speed: 0,
         coolant: Math.round(88 + Math.sin(t * 0.02) * 3),
         throttle: Math.round(3 + Math.abs(Math.sin(t * 0.1)) * 8),
         engineLoad: Math.round(18 + Math.sin(t * 0.07) * 12),
@@ -222,8 +245,104 @@ export function OBDProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const scanBluetooth = useCallback(async () => {
+    if (Platform.OS === "web") {
+      setBtError("Bluetooth is not available in the browser. Use the Android app.");
+      return;
+    }
+    setBtScanning(true);
+    setBtError(null);
+    setBtDevices([]);
+    try {
+      const paired = await elm327.getPairedDevices();
+      setBtDevices(paired);
+      if (paired.length === 0) {
+        setBtError("No paired Bluetooth devices found. Pair your ELM327 adapter in Android Bluetooth Settings first.");
+      }
+      elm327.startDiscovery((device) => {
+        setBtDevices((prev) => {
+          const exists = prev.some((d) => d.address === device.address);
+          return exists ? prev : [...prev, device];
+        });
+      });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setBtError(msg);
+    } finally {
+      setBtScanning(false);
+    }
+  }, []);
+
+  const connectBluetooth = useCallback(async (address: string, name: string): Promise<{ success: boolean; error?: string }> => {
+    setConnectionState("connecting");
+    setConnectionType("bluetooth");
+    setBtError(null);
+    try {
+      const result = await elm327.connect(address, name);
+      if (!result.success) {
+        setConnectionState("disconnected");
+        setConnectionType(null);
+        setBtError(result.error ?? "Connection failed");
+        return { success: false, error: result.error };
+      }
+
+      setDeviceName(result.deviceName);
+      setProtocol(result.protocol);
+      setProtocolNumber(result.protocolNumber);
+      setConnectionState("connected");
+
+      elm327.startPolling(
+        (data) => {
+          setSensorData((prev) => ({ ...prev, ...data }));
+        },
+        (error) => {
+          setBtError(error);
+          setConnectionState("disconnected");
+          setConnectionType(null);
+          setDeviceName("");
+          setProtocol("");
+          setProtocolNumber("");
+          setSensorData(emptySensorData);
+        },
+      );
+
+      try {
+        const storedRaw = await elm327.readDTCs();
+        const pendingRaw = await elm327.readPendingDTCs();
+        const storedParsed = parseDTCs(storedRaw, "stored");
+        const pendingParsed = parseDTCs(pendingRaw, "pending");
+        const allCodes = [...storedParsed, ...pendingParsed];
+        const mapped: DTC[] = allCodes.map((d, i) => {
+          const known = DTC_DESCRIPTIONS[d.code];
+          return {
+            id: String(i + 1),
+            code: d.code,
+            description: known?.description ?? "Unknown fault code",
+            type: d.type,
+            severity: known?.severity ?? "medium",
+            module: "ECM",
+          };
+        });
+        setDTCs(mapped);
+      } catch {
+        // DTC read failure is non-fatal
+      }
+
+      return { success: true };
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setConnectionState("disconnected");
+      setConnectionType(null);
+      setBtError(msg);
+      return { success: false, error: msg };
+    }
+  }, []);
+
   const connect = useCallback(
     (type: ConnectionType) => {
+      if (type === "bluetooth") {
+        return;
+      }
       setConnectionState("connecting");
       setConnectionType(type);
       setTimeout(() => {
@@ -243,8 +362,11 @@ export function OBDProvider({ children }: { children: React.ReactNode }) {
     [startDemoSimulation],
   );
 
-  const disconnect = useCallback(() => {
+  const disconnect = useCallback(async () => {
     stopDemoSimulation();
+    if (connectionType === "bluetooth") {
+      await elm327.disconnect();
+    }
     setConnectionState("disconnected");
     setConnectionType(null);
     setDeviceName("");
@@ -256,23 +378,69 @@ export function OBDProvider({ children }: { children: React.ReactNode }) {
     setMisfireCounters([]);
     setFreezeFrame(null);
     setEcuInfo(null);
-  }, [stopDemoSimulation]);
+    setBtError(null);
+  }, [stopDemoSimulation, connectionType]);
 
-  const clearDTCs = useCallback(() => {
+  const clearDTCs = useCallback(async () => {
+    if (connectionType === "bluetooth" && elm327.isConnected()) {
+      try {
+        await elm327.clearDTCs();
+      } catch {
+        // Ignore
+      }
+    }
     setDTCs([]);
-  }, []);
+  }, [connectionType]);
 
-  const readDTCs = useCallback(() => {
+  const readDTCs = useCallback(async () => {
     if (connectionState === "demo") {
       setDTCs(DEMO_DTCS);
+      return;
     }
-  }, [connectionState]);
+    if (connectionType === "bluetooth" && elm327.isConnected()) {
+      try {
+        const storedRaw = await elm327.readDTCs();
+        const pendingRaw = await elm327.readPendingDTCs();
+        const allCodes = [
+          ...parseDTCs(storedRaw, "stored"),
+          ...parseDTCs(pendingRaw, "pending"),
+        ];
+        const mapped: DTC[] = allCodes.map((d, i) => {
+          const known = DTC_DESCRIPTIONS[d.code];
+          return {
+            id: String(i + 1),
+            code: d.code,
+            description: known?.description ?? "Unknown fault code",
+            type: d.type,
+            severity: known?.severity ?? "medium",
+            module: "ECM",
+          };
+        });
+        setDTCs(mapped);
+      } catch {
+        // Ignore
+      }
+    }
+  }, [connectionState, connectionType]);
 
-  const readIMReadiness = useCallback(() => {
+  const readIMReadiness = useCallback(async () => {
     if (connectionState === "demo") {
       setTimeout(() => setIMReadiness(DEMO_IM), 800);
+      return;
     }
-  }, [connectionState]);
+    if (connectionType === "bluetooth" && elm327.isConnected()) {
+      try {
+        const raw = await elm327.readIMReadiness();
+        const parsed = parseOBDResponse(raw);
+        if (parsed) {
+          const items = parseIMReadiness(parsed.data);
+          setIMReadiness(items);
+        }
+      } catch {
+        // Ignore
+      }
+    }
+  }, [connectionState, connectionType]);
 
   const readMisfires = useCallback(() => {
     if (connectionState === "demo") {
@@ -286,7 +454,7 @@ export function OBDProvider({ children }: { children: React.ReactNode }) {
     }
   }, [connectionState]);
 
-  const readFromECU = useCallback(() => {
+  const readFromECU = useCallback(async () => {
     if (connectionState === "demo") {
       setTimeout(
         () =>
@@ -298,8 +466,22 @@ export function OBDProvider({ children }: { children: React.ReactNode }) {
           }),
         900,
       );
+      return;
     }
-  }, [connectionState]);
+    if (connectionType === "bluetooth" && elm327.isConnected()) {
+      try {
+        const protocolResp = await elm327.readECUName();
+        setEcuInfo({
+          protocol,
+          ecuName: protocolResp.trim() || "Unknown ECU",
+          calId: "N/A",
+          cvn: "N/A",
+        });
+      } catch {
+        // Ignore
+      }
+    }
+  }, [connectionState, connectionType, protocol]);
 
   const lookupVIN = useCallback(async (vin: string) => {
     if (vin.length !== 17) return;
@@ -325,7 +507,7 @@ export function OBDProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const runBiDiTest = useCallback(
-    async (testName: string): Promise<string> => {
+    async (_testName: string): Promise<string> => {
       if (connectionState !== "demo" && connectionState !== "connected") {
         return "NOT_CONNECTED";
       }
@@ -336,7 +518,7 @@ export function OBDProvider({ children }: { children: React.ReactNode }) {
   );
 
   const runServiceCommand = useCallback(
-    async (commandName: string): Promise<string> => {
+    async (_commandName: string): Promise<string> => {
       if (connectionState !== "demo" && connectionState !== "connected") {
         return "NOT_CONNECTED";
       }
@@ -347,7 +529,10 @@ export function OBDProvider({ children }: { children: React.ReactNode }) {
   );
 
   useEffect(() => {
-    return () => stopDemoSimulation();
+    return () => {
+      stopDemoSimulation();
+      elm327.disconnect().catch(() => {});
+    };
   }, [stopDemoSimulation]);
 
   return (
@@ -366,6 +551,7 @@ export function OBDProvider({ children }: { children: React.ReactNode }) {
         vinResult,
         vinLoading,
         connect,
+        connectBluetooth,
         disconnect,
         clearDTCs,
         readDTCs,
@@ -377,6 +563,10 @@ export function OBDProvider({ children }: { children: React.ReactNode }) {
         runServiceCommand,
         readFromECU,
         ecuInfo,
+        btDevices,
+        btScanning,
+        btError,
+        scanBluetooth,
       }}
     >
       {children}
