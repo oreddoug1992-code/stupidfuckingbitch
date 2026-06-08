@@ -55,7 +55,7 @@
     },
     "extra": {
       "eas": {
-        "projectId": "obd2-pro"
+        "projectId": "REPLACE_WITH_EAS_PROJECT_ID"
       }
     }
   }
