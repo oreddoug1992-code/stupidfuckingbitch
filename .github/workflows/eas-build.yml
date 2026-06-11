@@ -1,108 +1,44 @@
-name: EAS Build (Android APK)
+name: Local Android APK Build
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - 'artifacts/obd2-pro/**'
+    branches: [ main ]
   workflow_dispatch:
-    inputs:
-      profile:
-        description: 'EAS build profile'
-        required: true
-        default: 'preview'
-        type: choice
-        options:
-          - preview
-          - production
 
 jobs:
   build-android:
-    name: Build Android APK
+    name: Build Android APK locally
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: artifacts/obd2-pro
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
+          cache: 'pnpm'
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4
         with:
           version: 9
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
-      - name: Setup EAS CLI
-        run: npm install -g eas-cli@latest
+      - name: Prebuild Android
+        run: pnpm exec expo prebuild --platform android --clean --non-interactive
 
-      - name: Validate EAS configuration
-        working-directory: artifacts/obd2-pro
+      - name: Build Debug APK
         run: |
-          if [ -z "$EXPO_TOKEN" ]; then
-            echo "::error::EXPO_TOKEN secret is not set. Add it at Settings → Secrets → Actions in your GitHub repo."
-            exit 1
-          fi
+          cd android
+          ./gradlew :app:assembleDebug --stacktrace
 
-          PROJECT_ID=$(python3 -c "
-          import json, sys
-          with open('app.json') as f:
-            data = json.load(f)
-          pid = data.get('expo', {}).get('extra', {}).get('eas', {}).get('projectId', '')
-          print(pid)
-          ")
-          UUID_PATTERN='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-          if ! echo "$PROJECT_ID" | grep -qiE "$UUID_PATTERN"; then
-            echo "::error::expo.extra.eas.projectId in app.json is not a valid UUID (found: '$PROJECT_ID')."
-            echo "::error::Run 'eas build:configure' inside artifacts/obd2-pro while logged in, then commit the updated app.json."
-            exit 1
-          fi
-
-          echo "EAS project ID: $PROJECT_ID"
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-
-      - name: Build Android APK via EAS
-        id: eas_build
-        working-directory: artifacts/obd2-pro
-        run: |
-          BUILD_JSON=$(eas build \
-            --platform android \
-            --profile ${{ github.event.inputs.profile || 'preview' }} \
-            --non-interactive \
-            --json)
-          echo "EAS build output:"
-          echo "$BUILD_JSON"
-          APK_URL=$(echo "$BUILD_JSON" | python3 -c "
-          import sys, json
-          data = json.load(sys.stdin)
-          builds = data if isinstance(data, list) else [data]
-          url = builds[0]['artifacts']['buildUrl']
-          print(url)
-          ")
-          if [ -z "$APK_URL" ]; then
-            echo "::error::Could not extract APK download URL from EAS build output."
-            exit 1
-          fi
-          echo "APK URL: $APK_URL"
-          echo "apk_url=$APK_URL" >> "$GITHUB_OUTPUT"
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-
-      - name: Download APK from EAS
-        run: |
-          curl -fSL "${{ steps.eas_build.outputs.apk_url }}" -o obd2-pro.apk
-          echo "Downloaded $(du -sh obd2-pro.apk | cut -f1) APK"
-
-      - name: Upload APK as workflow artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: obd2-pro-apk-${{ github.run_number }}
-          path: obd2-pro.apk
-          retention-days: 30
-          if-no-files-found: error
+          name: obd2-pro-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk
+          retention-days: 7
