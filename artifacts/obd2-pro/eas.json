@@ -7,6 +7,11 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
+      "env": {
+        "PNPM_FLAGS": "--no-frozen-lockfile",
+        "NPM_CONFIG_FROZEN_LOCKFILE": "false",
+        "NPM_CONFIG_PREFER_FROZEN_LOCKFILE": "false"
+      },
       "android": {
         "buildType": "apk",
         "gradleCommand": ":app:assembleDebug"
@@ -17,6 +22,11 @@
     },
     "preview": {
       "distribution": "internal",
+      "env": {
+        "PNPM_FLAGS": "--no-frozen-lockfile",
+        "NPM_CONFIG_FROZEN_LOCKFILE": "false",
+        "NPM_CONFIG_PREFER_FROZEN_LOCKFILE": "false"
+      },
       "android": {
         "buildType": "apk"
       },
@@ -26,6 +36,11 @@
     },
     "production": {
       "distribution": "store",
+      "env": {
+        "PNPM_FLAGS": "--no-frozen-lockfile",
+        "NPM_CONFIG_FROZEN_LOCKFILE": "false",
+        "NPM_CONFIG_PREFER_FROZEN_LOCKFILE": "false"
+      },
       "android": {
         "buildType": "app-bundle"
       },

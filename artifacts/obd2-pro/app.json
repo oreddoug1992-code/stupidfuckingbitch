@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "OBD2 Pro",
-    "slug": "obd2-pro",
+    "slug": "obd",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -55,7 +55,7 @@
     },
     "extra": {
       "eas": {
-        "projectId": "0f2f1e25-fb90-4cb4-baba-ab4f4a06d5aa"
+        "projectId": "b8c4b4de-32a8-4c75-9f2b-92c9b57824de"
       }
     }
   }

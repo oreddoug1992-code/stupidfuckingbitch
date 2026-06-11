@@ -1,44 +1,70 @@
-name: Local Android APK Build
+name: EAS Android Production Build
 
 on:
   push:
     branches: [ main ]
+    paths:
+      - '.github/workflows/eas-build.yml'
+      - 'artifacts/obd2-pro/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
   workflow_dispatch:
 
 jobs:
   build-android:
-    name: Build Android APK locally
+    name: Build Android production with EAS
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: artifacts/obd2-pro
-
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      EAS_BUILD_NO_EXPO_GO_WARNING: true
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          node-version: 24
-          cache: 'pnpm'
+          node-version: 20
 
-      - uses: pnpm/action-setup@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
         with:
           version: 9
 
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
 
-      - name: Prebuild Android
-        run: pnpm exec expo prebuild --platform android --clean --non-interactive
+      - name: Setup EAS CLI
+        run: npm install -g eas-cli@latest
 
-      - name: Build Debug APK
+      - name: Validate EAS secret and project ID
+        working-directory: artifacts/obd2-pro
         run: |
-          cd android
-          ./gradlew :app:assembleDebug --stacktrace
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "::error::EXPO_TOKEN secret is not set. Add it at Settings > Secrets and variables > Actions."
+            exit 1
+          fi
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: obd2-pro-debug-apk
-          path: android/app/build/outputs/apk/debug/*.apk
-          retention-days: 7
+          PROJECT_ID=$(python3 -c "
+          import json
+          with open('app.json') as f:
+            data = json.load(f)
+          print(data.get('expo', {}).get('extra', {}).get('eas', {}).get('projectId', ''))
+          ")
+          UUID_PATTERN='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          if ! echo "$PROJECT_ID" | grep -qiE "$UUID_PATTERN"; then
+            echo "::error::expo.extra.eas.projectId in app.json is not a valid UUID: '$PROJECT_ID'"
+            exit 1
+          fi
+
+          echo "EAS project ID: $PROJECT_ID"
+
+      - name: Build Android production via EAS
+        working-directory: artifacts/obd2-pro
+        run: |
+          eas build \
+            --platform android \
+            --profile production \
+            --non-interactive \
+            --wait
