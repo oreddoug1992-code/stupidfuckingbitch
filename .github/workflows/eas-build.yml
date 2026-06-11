@@ -19,7 +19,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: 'pnpm'
 
       - uses: pnpm/action-setup@v4
         with:
@@ -29,16 +28,18 @@ jobs:
         run: pnpm install --no-frozen-lockfile
 
       - name: Prebuild Android
-        run: pnpm exec expo prebuild --platform android --clean --non-interactive
+        run: CI=1 pnpm exec expo prebuild --platform android --clean
 
       - name: Build Debug APK
         run: |
           cd android
+          chmod +x ./gradlew
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
           ./gradlew :app:assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: obd2-pro-debug-apk
-          path: android/app/build/outputs/apk/debug/*.apk
+          path: artifacts/obd2-pro/android/app/build/outputs/apk/debug/*.apk
           retention-days: 7
