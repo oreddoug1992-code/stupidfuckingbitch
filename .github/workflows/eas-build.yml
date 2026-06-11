@@ -28,7 +28,7 @@ jobs:
         run: pnpm install --no-frozen-lockfile
 
       - name: Prebuild Android
-        run: CI=1 pnpm exec expo prebuild --platform android --clean
+        run: CI=1 pnpm exec expo prebuild --platform android --clean --no-install
 
       - name: Build Debug APK
         run: |
