@@ -7,6 +7,9 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
+      "env": {
+        "PNPM_FLAGS": "--no-frozen-lockfile"
+      },
       "android": {
         "buildType": "apk",
         "gradleCommand": ":app:assembleDebug"
@@ -17,6 +20,9 @@
     },
     "preview": {
       "distribution": "internal",
+      "env": {
+        "PNPM_FLAGS": "--no-frozen-lockfile"
+      },
       "android": {
         "buildType": "apk"
       },
@@ -26,6 +32,9 @@
     },
     "production": {
       "distribution": "store",
+      "env": {
+        "PNPM_FLAGS": "--no-frozen-lockfile"
+      },
       "android": {
         "buildType": "app-bundle"
       },
