@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "OBD2 Pro",
-    "slug": "obd2-pro",
+    "slug": "obd",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
