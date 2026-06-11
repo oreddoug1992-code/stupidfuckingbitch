@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/eas-build.yml'
       - 'artifacts/obd2-pro/**'
+      - 'app.json'
       - 'package.json'
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
@@ -17,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-      EAS_BUILD_NO_EXPO_GO_WARNING: true
+      EAS_BUILD_NO_EXPO_GO_WARNING: "true"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -46,25 +47,77 @@ jobs:
             exit 1
           fi
 
-          PROJECT_ID=$(python3 -c "
+          echo "Logged in to Expo as:"
+          eas whoami
+
+          PROJECT_ID=$(python3 - <<'PY'
           import json
-          with open('app.json') as f:
-            data = json.load(f)
+          with open('app.json', encoding='utf-8') as f:
+              data = json.load(f)
           print(data.get('expo', {}).get('extra', {}).get('eas', {}).get('projectId', ''))
-          ")
+          PY
+          )
           UUID_PATTERN='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
           if ! echo "$PROJECT_ID" | grep -qiE "$UUID_PATTERN"; then
-            echo "::error::expo.extra.eas.projectId in app.json is not a valid UUID: '$PROJECT_ID'"
+            echo "::error::expo.extra.eas.projectId in artifacts/obd2-pro/app.json is not a valid UUID: '$PROJECT_ID'"
             exit 1
+          fi
+
+          ROOT_PROJECT_ID=$(python3 - <<'PY'
+          import json
+          with open('../../app.json', encoding='utf-8') as f:
+              data = json.load(f)
+          print(data.get('expo', {}).get('extra', {}).get('eas', {}).get('projectId', ''))
+          PY
+          )
+          if [ "$ROOT_PROJECT_ID" != "$PROJECT_ID" ]; then
+            echo "::warning::Root app.json projectId ($ROOT_PROJECT_ID) does not match artifacts/obd2-pro/app.json projectId ($PROJECT_ID). The workflow builds artifacts/obd2-pro."
           fi
 
           echo "EAS project ID: $PROJECT_ID"
 
       - name: Build Android production via EAS
+        id: eas_build
         working-directory: artifacts/obd2-pro
         run: |
-          eas build \
+          set +e
+          BUILD_JSON=$(eas build \
             --platform android \
             --profile production \
             --non-interactive \
-            --wait
+            --wait \
+            --json 2>eas-build-error.log)
+          STATUS=$?
+          set -e
+
+          if [ $STATUS -ne 0 ]; then
+            echo "EAS build failed. Error log:"
+            cat eas-build-error.log
+            if grep -q "Entity not authorized" eas-build-error.log; then
+              echo "::error::Expo token is valid but cannot access this app. Replace GitHub secret EXPO_TOKEN with a token from the Expo account or organization that owns the EAS project ID in artifacts/obd2-pro/app.json."
+            fi
+            exit $STATUS
+          fi
+
+          echo "EAS build output:"
+          echo "$BUILD_JSON"
+
+          ARTIFACT_URL=$(echo "$BUILD_JSON" | python3 - <<'PY'
+          import json, sys
+          raw = sys.stdin.read().strip()
+          data = json.loads(raw)
+          builds = data if isinstance(data, list) else [data]
+          build = builds[0]
+          artifacts = build.get('artifacts') or {}
+          url = artifacts.get('buildUrl') or artifacts.get('applicationArchiveUrl') or build.get('artifactsUrl') or ''
+          print(url)
+          PY
+          )
+
+          if [ -z "$ARTIFACT_URL" ]; then
+            echo "::error::Could not extract Android artifact URL from EAS build output."
+            exit 1
+          fi
+
+          echo "Android artifact URL: $ARTIFACT_URL"
+          echo "artifact_url=$ARTIFACT_URL" >> "$GITHUB_OUTPUT"
