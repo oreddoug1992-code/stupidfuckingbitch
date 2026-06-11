@@ -1,52 +1,99 @@
-name: Local Android APK Build
+name: EAS Android Production Build
 
 on:
   push:
     branches: [ main ]
+    paths:
+      - '.github/workflows/eas-build.yml'
+      - 'artifacts/obd2-pro/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
   workflow_dispatch:
 
 jobs:
   build-android:
-    name: Build Android APK locally
+    name: Build Android production with EAS
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: artifacts/obd2-pro
-
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 20
 
-      - uses: pnpm/action-setup@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
         with:
           version: 9
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
-
-      - uses: android-actions/setup-android@v3
 
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
 
-      - name: Prebuild Android
-        run: CI=1 pnpm exec expo prebuild --platform android --clean --no-install
+      - name: Setup EAS CLI
+        run: npm install -g eas-cli@latest
 
-      - name: Build Debug APK
+      - name: Validate EAS secret and project ID
+        working-directory: artifacts/obd2-pro
         run: |
-          cd android
-          chmod +x ./gradlew
-          echo "sdk.dir=$ANDROID_HOME" > local.properties
-          ./gradlew :app:assembleDebug --stacktrace
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "::error::EXPO_TOKEN secret is not set. Add it at Settings > Secrets and variables > Actions."
+            exit 1
+          fi
 
-      - name: Upload APK
+          PROJECT_ID=$(python3 -c "
+          import json
+          with open('app.json') as f:
+            data = json.load(f)
+          print(data.get('expo', {}).get('extra', {}).get('eas', {}).get('projectId', ''))
+          ")
+          UUID_PATTERN='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          if ! echo "$PROJECT_ID" | grep -qiE "$UUID_PATTERN"; then
+            echo "::error::expo.extra.eas.projectId in app.json is not a valid UUID: '$PROJECT_ID'"
+            exit 1
+          fi
+
+          echo "EAS project ID: $PROJECT_ID"
+
+      - name: Build Android production via EAS
+        id: eas_build
+        working-directory: artifacts/obd2-pro
+        run: |
+          BUILD_JSON=$(eas build \
+            --platform android \
+            --profile production \
+            --non-interactive \
+            --json)
+          echo "EAS build output:"
+          echo "$BUILD_JSON"
+          APK_URL=$(echo "$BUILD_JSON" | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          builds = data if isinstance(data, list) else [data]
+          artifacts = builds[0].get('artifacts') or {}
+          print(artifacts.get('buildUrl') or '')
+          ")
+          if [ -z "$APK_URL" ]; then
+            echo "::warning::EAS did not return a finished APK/AAB URL yet. Check the EAS build link in the logs."
+            exit 0
+          fi
+          echo "APK URL: $APK_URL"
+          echo "apk_url=$APK_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Download production build from EAS
+        if: steps.eas_build.outputs.apk_url != ''
+        run: |
+          curl -fSL "${{ steps.eas_build.outputs.apk_url }}" -o obd2-pro-production.apk
+          echo "Downloaded $(du -sh obd2-pro-production.apk | cut -f1) APK"
+
+      - name: Upload production build artifact
+        if: steps.eas_build.outputs.apk_url != ''
         uses: actions/upload-artifact@v4
         with:
-          name: obd2-pro-debug-apk
-          path: artifacts/obd2-pro/android/app/build/outputs/apk/debug/*.apk
-          retention-days: 7
+          name: obd2-pro-eas-production-build
+          path: obd2-pro-production.apk
+          retention-days: 30
