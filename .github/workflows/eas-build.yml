@@ -17,6 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      EAS_BUILD_NO_EXPO_GO_WARNING: true
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -60,40 +61,10 @@ jobs:
           echo "EAS project ID: $PROJECT_ID"
 
       - name: Build Android production via EAS
-        id: eas_build
         working-directory: artifacts/obd2-pro
         run: |
-          BUILD_JSON=$(eas build \
+          eas build \
             --platform android \
             --profile production \
             --non-interactive \
-            --json)
-          echo "EAS build output:"
-          echo "$BUILD_JSON"
-          APK_URL=$(echo "$BUILD_JSON" | python3 -c "
-          import sys, json
-          data = json.load(sys.stdin)
-          builds = data if isinstance(data, list) else [data]
-          artifacts = builds[0].get('artifacts') or {}
-          print(artifacts.get('buildUrl') or '')
-          ")
-          if [ -z "$APK_URL" ]; then
-            echo "::warning::EAS did not return a finished APK/AAB URL yet. Check the EAS build link in the logs."
-            exit 0
-          fi
-          echo "APK URL: $APK_URL"
-          echo "apk_url=$APK_URL" >> "$GITHUB_OUTPUT"
-
-      - name: Download production build from EAS
-        if: steps.eas_build.outputs.apk_url != ''
-        run: |
-          curl -fSL "${{ steps.eas_build.outputs.apk_url }}" -o obd2-pro-production.apk
-          echo "Downloaded $(du -sh obd2-pro-production.apk | cut -f1) APK"
-
-      - name: Upload production build artifact
-        if: steps.eas_build.outputs.apk_url != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: obd2-pro-eas-production-build
-          path: obd2-pro-production.apk
-          retention-days: 30
+            --wait
